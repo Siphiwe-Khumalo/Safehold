@@ -4,6 +4,7 @@ import HoldButton from '../components/HoldButton.jsx'
 import { api } from '../lib/api.js'
 import { ensureUserId } from '../lib/deviceUser.js'
 import { getCurrentPosition, watchPosition } from '../lib/geolocation.js'
+import { buildEmergencyMessage, buildWaLink } from '../lib/whatsapp.js'
 
 // UI states for the single-purpose emergency screen.
 const State = {
@@ -19,13 +20,22 @@ export default function EmergencyScreen() {
   const [location, setLocation] = useState(null)
   const [error, setError] = useState(null)
   const [endedStatus, setEndedStatus] = useState(null)
+  const [contacts, setContacts] = useState([])
   const stopWatchRef = useRef(null)
   const userIdRef = useRef(null)
 
-  // Register the device (anonymous) as early as possible.
+  // Register the device (anonymous) and load enabled trusted contacts early so
+  // the WhatsApp alert buttons are ready the instant an emergency starts.
   useEffect(() => {
-    ensureUserId().then((id) => {
+    ensureUserId().then(async (id) => {
       userIdRef.current = id
+      if (!id) return
+      try {
+        const list = await api.listContacts(id)
+        setContacts(list.filter((c) => c.enabled && c.phone))
+      } catch {
+        /* contacts are optional; ignore load failure */
+      }
     })
   }, [])
 
@@ -135,6 +145,7 @@ export default function EmergencyScreen() {
             location={location}
             trackUrl={trackUrl}
             error={error}
+            contacts={contacts}
             onResolve={() => endIncident('RESOLVED')}
             onCancel={() => endIncident('CANCELLED')}
           />
@@ -152,12 +163,20 @@ function Header() {
   return (
     <header className="flex items-center justify-between px-5 pt-4">
       <span className="text-lg font-black tracking-tight">SafeHold</span>
-      <Link
-        to="/contacts"
-        className="rounded-lg px-3 py-2 text-sm font-semibold text-white/80 underline-offset-4 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-      >
-        Trusted contacts
-      </Link>
+      <nav className="flex items-center gap-1">
+        <Link
+          to="/map"
+          className="rounded-lg px-3 py-2 text-sm font-semibold text-white/80 underline-offset-4 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+        >
+          My map
+        </Link>
+        <Link
+          to="/contacts"
+          className="rounded-lg px-3 py-2 text-sm font-semibold text-white/80 underline-offset-4 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+        >
+          Contacts
+        </Link>
+      </nav>
     </header>
   )
 }
@@ -194,7 +213,21 @@ function ActivatingView() {
   )
 }
 
-function ActiveView({ location, trackUrl, error, onResolve, onCancel }) {
+function ActiveView({ location, trackUrl, error, contacts, onResolve, onCancel }) {
+  const [sent, setSent] = useState(() => new Set())
+  const [toast, setToast] = useState(null)
+
+  const sendWhatsApp = (contact) => {
+    const message = buildEmergencyMessage({ trackUrl, location })
+    const link = buildWaLink(contact.phone, message)
+    // Open WhatsApp with the message pre-filled (user taps send).
+    window.open(link, '_blank', 'noopener')
+    setSent((prev) => new Set(prev).add(contact.id))
+    setToast(`WhatsApp opened for ${contact.name} — tap send to alert them.`)
+    window.clearTimeout(sendWhatsApp._t)
+    sendWhatsApp._t = window.setTimeout(() => setToast(null), 4000)
+  }
+
   return (
     <div className="w-full max-w-sm text-center" aria-live="assertive">
       <div className="mb-6 rounded-2xl bg-danger px-5 py-6 ring-1 ring-white/10">
@@ -208,11 +241,46 @@ function ActiveView({ location, trackUrl, error, onResolve, onCancel }) {
           </h1>
         </div>
         <p className="mt-2 text-sm text-white/90">
-          Your trusted contacts are being alerted with your live location.
+          Alert your trusted contacts on WhatsApp with your live location.
         </p>
       </div>
 
       <LocationCard location={location} />
+
+      {/* WhatsApp alert buttons — one per enabled trusted contact. */}
+      <div className="mt-4 text-left">
+        <p className="mb-2 text-xs uppercase tracking-wide text-white/50">
+          Send WhatsApp alert
+        </p>
+        {contacts.length === 0 ? (
+          <div className="rounded-xl bg-white/5 p-4 text-sm text-white/60">
+            No trusted contacts yet.{' '}
+            <Link to="/contacts" className="text-sky-300 underline">
+              Add one
+            </Link>{' '}
+            so you can alert them here.
+          </div>
+        ) : (
+          <div className="grid gap-2">
+            {contacts.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => sendWhatsApp(c)}
+                className="flex items-center justify-between rounded-xl bg-[#25D366] px-4 py-3 text-left font-bold text-black focus:outline-none focus-visible:ring-4 focus-visible:ring-white/70"
+              >
+                <span className="flex items-center gap-2">
+                  <WhatsAppIcon />
+                  {c.name}
+                  {c.relationship ? (
+                    <span className="font-normal opacity-70">· {c.relationship}</span>
+                  ) : null}
+                </span>
+                <span className="text-sm">{sent.has(c.id) ? '✓ Sent' : 'Send'}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       {trackUrl && (
         <div className="mt-4 rounded-xl bg-white/5 p-4 text-left">
@@ -234,6 +302,16 @@ function ActiveView({ location, trackUrl, error, onResolve, onCancel }) {
         </p>
       )}
 
+      {/* In-app confirmation popup. */}
+      {toast && (
+        <div
+          role="status"
+          className="fixed inset-x-4 bottom-6 z-50 mx-auto max-w-sm rounded-xl bg-safe px-4 py-3 text-center text-sm font-semibold text-white shadow-2xl"
+        >
+          {toast}
+        </div>
+      )}
+
       <div className="mt-8 grid gap-3">
         <button
           onClick={onResolve}
@@ -249,6 +327,14 @@ function ActiveView({ location, trackUrl, error, onResolve, onCancel }) {
         </button>
       </div>
     </div>
+  )
+}
+
+function WhatsAppIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38a9.9 9.9 0 0 0 4.79 1.22h.01c5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.82 9.82 0 0 0 12.04 2Zm0 1.8c2.16 0 4.19.84 5.72 2.37a8.06 8.06 0 0 1 2.37 5.72c0 4.46-3.63 8.09-8.1 8.09a8.1 8.1 0 0 1-4.12-1.13l-.3-.18-3.12.82.83-3.04-.19-.31a8.03 8.03 0 0 1-1.24-4.3c0-4.46 3.63-8.1 8.1-8.1Zm-2.28 4.2c-.15 0-.4.06-.6.28-.21.22-.8.78-.8 1.9 0 1.12.82 2.2.93 2.35.12.15 1.6 2.53 3.95 3.45 1.95.77 2.35.62 2.77.58.42-.04 1.37-.56 1.56-1.1.19-.54.19-1 .13-1.1-.06-.09-.21-.15-.44-.27-.23-.11-1.37-.68-1.58-.75-.21-.08-.37-.11-.52.11-.15.22-.6.75-.73.9-.14.15-.27.17-.5.06-.23-.12-.98-.36-1.86-1.15-.69-.61-1.15-1.37-1.29-1.6-.13-.22-.01-.34.1-.46.1-.1.23-.27.34-.4.11-.14.15-.23.23-.38.08-.15.04-.29-.02-.4-.06-.12-.52-1.27-.72-1.73-.18-.44-.37-.38-.52-.39-.13 0-.29-.01-.44-.01Z" />
+    </svg>
   )
 }
 
