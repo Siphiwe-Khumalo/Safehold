@@ -1,0 +1,22 @@
+# Local PostgreSQL for development. Run: docker compose up -d
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: safehold-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: safehold
+      POSTGRES_PASSWORD: safehold
+      POSTGRES_DB: safehold
+    ports:
+      - '5432:5432'
+    volumes:
+      - safehold-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U safehold -d safehold']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  safehold-pgdata:

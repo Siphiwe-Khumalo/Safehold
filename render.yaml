@@ -1,0 +1,46 @@
+# Render Blueprint — one-click deploy of SafeHold (web service + Postgres).
+#
+# How to use:
+#   1. Push this repo to GitHub (see README "Deploy").
+#   2. On https://render.com → New → Blueprint → connect this repo.
+#   3. Render provisions the database and web service and wires DATABASE_URL.
+#      RENDER_EXTERNAL_URL is injected automatically for tracking links.
+#
+# The single web service builds the PWA and serves it together with the API,
+# so there is one HTTPS URL and no CORS configuration.
+
+databases:
+  - name: safehold-db
+    databaseName: safehold
+    user: safehold
+    plan: free
+
+services:
+  - type: web
+    name: safehold
+    runtime: node
+    plan: free
+    # Build the frontend PWA, then install backend deps.
+    buildCommand: >-
+      npm --prefix frontend ci &&
+      npm --prefix frontend run build &&
+      npm --prefix backend ci
+    # Apply migrations, then start the server (which serves API + PWA).
+    startCommand: >-
+      npm --prefix backend run migrate &&
+      npm --prefix backend start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: safehold-db
+          property: connectionString
+      # Render's managed Postgres requires SSL.
+      - key: DATABASE_SSL
+        value: 'true'
+      # Default notification channel logs alerts. To send real email, switch to
+      # 'smtp' and add SMTP_* vars in the Render dashboard (kept out of git).
+      - key: NOTIFY_PROVIDER
+        value: console
