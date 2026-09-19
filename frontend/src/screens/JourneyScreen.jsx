@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { watchPosition } from '../lib/geolocation.js'
+import { buildWaShareLink, buildLocationShareMessage } from '../lib/whatsapp.js'
+import WhatsAppIcon from '../components/WhatsAppIcon.jsx'
 
 // "My Journey" — an always-available live map that traces where you've been to
 // where you are now. Works with no emergency active.
@@ -165,6 +167,13 @@ export default function JourneyScreen() {
     if (last && map.current) map.current.setView([last.lat, last.lng], 16)
   }
 
+  const shareLocation = () => {
+    const last = trail[trail.length - 1]
+    const message = buildLocationShareMessage(last)
+    // No fixed recipient — WhatsApp lets the user pick who to share with.
+    window.open(buildWaShareLink(message), '_blank', 'noopener')
+  }
+
   // Stats
   let distance = 0
   for (let i = 1; i < trail.length; i++) distance += haversine(trail[i - 1], trail[i])
@@ -204,6 +213,17 @@ export default function JourneyScreen() {
         <Stat label="Distance" value={distanceLabel} />
         <Stat label="Duration" value={`${durationMin} min`} />
         <Stat label="Points" value={String(trail.length)} />
+      </div>
+
+      <div className="px-5 pb-3">
+        <button
+          onClick={shareLocation}
+          disabled={trail.length === 0}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#25D366] py-3 font-black text-black disabled:opacity-50 focus:outline-none focus-visible:ring-4 focus-visible:ring-white/70"
+        >
+          <WhatsAppIcon />
+          Share my location on WhatsApp
+        </button>
       </div>
 
       <div className="relative flex-1 px-5 pb-5">

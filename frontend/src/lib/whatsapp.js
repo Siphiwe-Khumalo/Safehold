@@ -33,3 +33,23 @@ export function buildWaLink(phone, message) {
   const number = normalizeForWa(phone)
   return `https://wa.me/${number}?text=${encodeURIComponent(message)}`
 }
+
+// A WhatsApp link with NO fixed recipient — opens WhatsApp's contact picker so
+// the user can share with anyone. Used for "share my location" outside an
+// emergency.
+export function buildWaShareLink(message) {
+  return `https://wa.me/?text=${encodeURIComponent(message)}`
+}
+
+// A friendly, non-emergency "here's where I am" message (current-location
+// snapshot via a Google Maps pin).
+export function buildLocationShareMessage(location) {
+  const when = new Date().toLocaleTimeString()
+  return [
+    '📍 Sharing my location with you.',
+    location
+      ? `I'm here: https://maps.google.com/?q=${location.lat},${location.lng}`
+      : '(location unavailable)',
+    `As of ${when}. Sent from SafeHold.`,
+  ].join('\n')
+}
