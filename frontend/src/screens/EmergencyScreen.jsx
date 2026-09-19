@@ -24,6 +24,7 @@ export default function EmergencyScreen() {
   const [contacts, setContacts] = useState([])
   const stopWatchRef = useRef(null)
   const userIdRef = useRef(null)
+  const incidentIdRef = useRef(null)
 
   // Register the device (anonymous) and load enabled trusted contacts early so
   // the WhatsApp alert buttons are ready the instant an emergency starts.
@@ -66,40 +67,57 @@ export default function EmergencyScreen() {
     )
   }, [])
 
+  // One-shot location fix — non-blocking. Allows a recent cached position so
+  // the first point appears fast, then the watch refines it.
+  const captureOnce = useCallback((incidentId, userId) => {
+    getCurrentPosition({ maximumAge: 60000, timeout: 12000 })
+      .then((loc) => {
+        setLocation(loc)
+        setError(null)
+        if (incidentId && userId) api.addLocation(incidentId, userId, loc).catch(() => {})
+      })
+      .catch((e) => setError(e.message))
+  }, [])
+
   const handleActivate = useCallback(async () => {
     setError(null)
     setState(State.ACTIVATING)
-
-    // 1. Get location first — it's the most valuable payload and may prompt
-    //    for permission.
-    let loc = null
-    try {
-      loc = await getCurrentPosition()
-      setLocation(loc)
-    } catch (e) {
-      setError(e.message) // continue anyway; an alert with no location is still useful
-    }
-
-    // 2. Create the incident on the backend.
     const userId = userIdRef.current
+
+    // 1. Create + activate the incident IMMEDIATELY — never wait for GPS.
+    //    Firing the alert fast matters more than having coordinates in the
+    //    first second; the location streams in right after.
+    let created = null
     try {
-      const created = await api.createIncident(userId, loc)
+      created = await api.createIncident(userId, null)
       setIncident(created)
-      setState(State.ACTIVE)
-      // 3-4. Incident is ACTIVE; begin streaming location updates.
-      beginLocationStream(created.id, userId)
-    } catch (e) {
-      // Backend unreachable — still show the ACTIVE emergency screen locally so
-      // the user is not left with a dead button. Tracking link needs backend.
+    } catch {
+      // Backend unreachable — still show the ACTIVE screen locally.
       setIncident({ id: null, shareToken: null, offline: true })
-      setState(State.ACTIVE)
-      beginLocationStream(null, null)
       setError(
         'Could not reach the alert server. Your emergency is active on this device, ' +
           'but trusted contacts may not have been notified yet.',
       )
     }
-  }, [beginLocationStream])
+    incidentIdRef.current = created?.id ?? null
+    setState(State.ACTIVE)
+
+    // 2. Stream location as it arrives (updates the map + backend + tracking link).
+    beginLocationStream(created?.id ?? null, userId)
+    // 3. Kick off a fast first fix in parallel (does not block anything).
+    captureOnce(created?.id ?? null, userId)
+  }, [beginLocationStream, captureOnce])
+
+  // Let the user re-request location if it was blocked/slow, without ending
+  // the emergency.
+  const retryLocation = useCallback(() => {
+    setError(null)
+    stopWatching()
+    const userId = userIdRef.current
+    const id = incidentIdRef.current
+    beginLocationStream(id, userId)
+    captureOnce(id, userId)
+  }, [beginLocationStream, captureOnce, stopWatching])
 
   const endIncident = useCallback(
     async (status) => {
@@ -147,6 +165,7 @@ export default function EmergencyScreen() {
             trackUrl={trackUrl}
             error={error}
             contacts={contacts}
+            onRetryLocation={retryLocation}
             onResolve={() => endIncident('RESOLVED')}
             onCancel={() => endIncident('CANCELLED')}
           />
@@ -214,7 +233,7 @@ function ActivatingView() {
   )
 }
 
-function ActiveView({ location, trackUrl, error, contacts, onResolve, onCancel }) {
+function ActiveView({ location, trackUrl, error, contacts, onRetryLocation, onResolve, onCancel }) {
   const [sent, setSent] = useState(() => new Set())
   const [toast, setToast] = useState(null)
 
@@ -246,7 +265,7 @@ function ActiveView({ location, trackUrl, error, contacts, onResolve, onCancel }
         </p>
       </div>
 
-      <LocationCard location={location} />
+      <LocationCard location={location} onRetryLocation={onRetryLocation} />
 
       {/* WhatsApp alert buttons — one per enabled trusted contact. */}
       <div className="mt-4 text-left">
@@ -359,11 +378,19 @@ function ActiveView({ location, trackUrl, error, contacts, onResolve, onCancel }
   )
 }
 
-function LocationCard({ location }) {
+function LocationCard({ location, onRetryLocation }) {
   if (!location) {
     return (
-      <div className="rounded-xl bg-white/5 p-4 text-sm text-white/60">
-        Waiting for your location…
+      <div className="rounded-xl bg-white/5 p-4 text-sm text-white/70">
+        <p>Getting your location… If nothing appears, location may be blocked.</p>
+        {onRetryLocation && (
+          <button
+            onClick={onRetryLocation}
+            className="mt-2 rounded-lg bg-white/15 px-4 py-2 text-sm font-bold text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+          >
+            Retry location
+          </button>
+        )}
       </div>
     )
   }
