@@ -21,8 +21,10 @@ services:
     runtime: node
     plan: free
     # Build the frontend PWA, then install backend deps.
+    # --include=dev is required because NODE_ENV=production (set below) makes npm
+    # skip devDependencies, but the build tools (vite, tailwind) live there.
     buildCommand: >-
-      npm --prefix frontend ci &&
+      npm --prefix frontend ci --include=dev &&
       npm --prefix frontend run build &&
       npm --prefix backend ci
     # Apply migrations, then start the server (which serves API + PWA).

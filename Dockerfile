@@ -7,7 +7,9 @@
 FROM node:22-alpine AS frontend
 WORKDIR /build/frontend
 COPY frontend/package*.json ./
-RUN npm ci
+# --include=dev ensures build tools (vite, tailwind) install even if the base
+# image or environment sets NODE_ENV=production.
+RUN npm ci --include=dev
 COPY frontend/ ./
 RUN npm run build
 
